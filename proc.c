@@ -7,23 +7,31 @@
 #include "proc.h"
 #include "spinlock.h"
 
+// The process table (ptable) holds all process control blocks (PCBs).
+// It is protected by a spinlock to ensure thread-safe access and modification
+// of process states and information. `NPROC` is the maximum number of processes.
+// Each `struct proc` entry in the `proc` array represents a single process.
+// The `lock` field is a spinlock that must be acquired before accessing ptable
+// to prevent race conditions.
 struct {
-  struct spinlock lock;
-  struct proc proc[NPROC];
+  struct spinlock lock; // Lock to protect access to the ptable.
+  struct proc proc[NPROC]; // Array of NPROC process control blocks.
 } ptable;
 
-static struct proc *initproc;
+static struct proc *initproc; // Pointer to the initial process (init), the first user process.
 
-int nextpid = 1;
-extern void forkret(void);
-extern void trapret(void);
+int nextpid = 1; // Counter for assigning unique process IDs (PIDs).
+extern void forkret(void); // Assembly function called when a new process starts executing after fork.
+extern void trapret(void); // Assembly function for returning from a trap (system call or interrupt).
 
-static void wakeup1(void *chan);
+static void wakeup1(void *chan); // Internal helper function for wakeup, assumes ptable.lock is held.
 
+// Initialize the process table lock.
+// This function is called once during kernel initialization (in main.c).
 void
 pinit(void)
 {
-  initlock(&ptable.lock, "ptable");
+  initlock(&ptable.lock, "ptable"); // Initialize the spinlock for ptable.
 }
 
 // Must be called with interrupts disabled
@@ -70,6 +78,25 @@ myproc(void) {
 // If found, change state to EMBRYO and initialize
 // state required to run in the kernel.
 // Otherwise return 0.
+//
+// Process states (`p->state` in `struct proc`):
+//   UNUSED:   The process table entry is free.
+//   EMBRYO:   Process is being created; initial state before it's ready to run.
+//             Kernel stack allocated, initial trap frame and context set up.
+//   SLEEPING: Process is waiting for an event (e.g., I/O completion, child exit, pipe data).
+//             `p->chan` stores the channel it's waiting on.
+//   RUNNABLE: Process is ready to run but waiting for a CPU to become available.
+//   RUNNING:  Process is currently executing on a CPU.
+//   ZOMBIE:   Process has exited but is waiting for its parent to collect its status
+//             and resources via `wait()`. Its resources (except PID and exit status) are freed.
+//
+// Allocates a new process control block (PCB) from the ptable.
+// If found, it initializes the PCB to the EMBRYO state, assigns a PID,
+// and sets up the kernel stack and initial kernel context for the new process.
+// The initial context is set up to start execution at `forkret`, which
+// then returns to `trapret`, eventually leading to user-space execution if it's a user process.
+// Returns a pointer to the new `struct proc` on success, or 0 if no free PCB is found
+// or if kernel stack allocation fails.
 static struct proc*
 allocproc(void)
 {
@@ -117,6 +144,11 @@ found:
 
 //PAGEBREAK: 32
 // Set up first user process.
+// This function is called by main() during kernel initialization to create
+// the very first user-mode process, known as "init" (or "initcode").
+// It allocates a PCB, sets up its page directory with kernel mappings,
+// copies the small initcode program into its memory (at virtual address 0),
+// and prepares its trap frame to start execution in user mode at address 0.
 void
 userinit(void)
 {
@@ -174,9 +206,16 @@ growproc(int n)
   return 0;
 }
 
-// Create a new process copying p as the parent.
-// Sets up stack to return as if from system call.
-// Caller must set state of returned proc to RUNNABLE.
+// Create a new process by duplicating the state of the calling process (parent).
+// This is the implementation of the fork() system call.
+// - Allocates a new PCB for the child process using `allocproc`.
+// - Copies the parent's user memory (address space) to the child using `copyuvm`.
+// - Copies the parent's trap frame, so the child starts as if it also called fork.
+// - Modifies the child's trap frame so that `fork()` returns 0 in the child.
+// - Duplicates open files and the current working directory.
+// - Sets the child's state to RUNNABLE.
+// Returns the child's PID to the parent, and 0 to the child.
+// Returns -1 on failure (e.g., cannot allocate PCB or copy memory).
 int
 fork(void)
 {
@@ -221,9 +260,16 @@ fork(void)
   return pid;
 }
 
-// Exit the current process.  Does not return.
-// An exited process remains in the zombie state
-// until its parent calls wait() to find out it exited.
+// Exit the current process. Does not return.
+// This is the implementation of the exit() system call.
+// - Closes all open files.
+// - Releases the current working directory.
+// - Wakes up the parent process if it's waiting in `wait()`.
+// - Reparents any children of the exiting process to the `init` process.
+// - Changes the process state to ZOMBIE.
+// - Calls the scheduler (`sched()`) to give up the CPU permanently.
+// The process's resources (like kstack and page directory) are cleaned up by the
+// parent process when it calls `wait()`.
 void
 exit(void)
 {
@@ -267,8 +313,14 @@ exit(void)
   panic("zombie exit");
 }
 
-// Wait for a child process to exit and return its pid.
-// Return -1 if this process has no children.
+// Wait for a child process to exit, collect its PID, and free its resources.
+// This is the implementation of the wait() system call.
+// - Scans the process table for child processes of the current process.
+// - If a ZOMBIE child is found, its resources (kernel stack, page directory) are freed,
+//   its PCB is marked UNUSED, and its PID is returned.
+// - If no ZOMBIE children are found but children exist, the current process sleeps
+//   (waiting for a child to exit). `wakeup1()` in `exit()` or `kill()` will wake it.
+// - If the current process has no children or is killed, it returns -1.
 int
 wait(void)
 {
@@ -312,13 +364,22 @@ wait(void)
 }
 
 //PAGEBREAK: 42
-// Per-CPU process scheduler.
-// Each CPU calls scheduler() after setting itself up.
-// Scheduler never returns.  It loops, doing:
-//  - choose a process to run
-//  - swtch to start running that process
-//  - eventually that process transfers control
-//      via swtch back to the scheduler.
+// Per-CPU process scheduler. Each CPU runs its own instance of scheduler().
+// This function is the heart of the xv6 scheduling mechanism.
+// It continuously loops, looking for a RUNNABLE process in the ptable.
+// When a RUNNABLE process is found:
+//  1. It sets up the CPU's context to run the chosen process (`c->proc = p`).
+//  2. Switches to the process's page table (`switchuvm(p)`).
+//  3. Changes the process's state to RUNNING.
+//  4. Performs a context switch (`swtch`) from the scheduler's context to the process's context.
+// When the process yields or its time slice ends (implicitly via timer interrupt and trap handling),
+// it switches back to the scheduler's context. The scheduler then continues its loop.
+// The scheduler enables interrupts (`sti()`) at the beginning of each loop iteration
+// to allow for timer interrupts and other hardware events.
+// It acquires `ptable.lock` before scanning `ptable` and releases it if no runnable
+// process is found in one pass, or just before switching to a process (the process
+// itself is responsible for releasing it via `forkret` or reacquiring/releasing it
+// around `sched` calls).
 void
 scheduler(void)
 {
@@ -355,13 +416,15 @@ scheduler(void)
   }
 }
 
-// Enter scheduler.  Must hold only ptable.lock
-// and have changed proc->state. Saves and restores
-// intena because intena is a property of this
-// kernel thread, not this CPU. It should
-// be proc->intena and proc->ncli, but that would
-// break in the few places where a lock is held but
-// there's no process.
+// Relinquish the CPU and enter the scheduler.
+// This function is called when a process wants to voluntarily give up the CPU
+// (e.g., in `yield()`) or when it needs to sleep (`sleep()`) or exit (`exit()`).
+// The caller must hold `ptable.lock` and must have already set the
+// current process's state (e.g., to RUNNABLE or SLEEPING).
+// `sched()` saves the current process's context (registers, EIP) and switches
+// to the scheduler's context on the current CPU (`mycpu()->scheduler`).
+// Interrupts must be disabled by the caller before calling `sched`, and `sched`
+// itself performs checks to ensure this and other invariants.
 void
 sched(void)
 {
@@ -391,8 +454,21 @@ yield(void)
   release(&ptable.lock);
 }
 
-// A fork child's very first scheduling by scheduler()
-// will swtch here.  "Return" to user space.
+// This function is the entry point for a new process after it's first scheduled.
+// When `allocproc` creates a new process, it sets the `eip` (instruction pointer)
+// in the new process's context to `forkret`. So, when the scheduler first
+// `swtch`es to this new process, `forkret` is the first C code it executes.
+// Its primary responsibilities are:
+//  1. Release the `ptable.lock` that was acquired by the scheduler before switching
+//     to this new process. This is crucial because the new process now runs independently.
+//  2. If this is the very first user process (`initproc`), it performs some one-time
+//     system initializations (like `iinit` for file system and `initlog`). These
+//     initializations need to run in a process context (e.g., they might call `sleep`).
+// After these steps, `forkret` effectively "returns". Its "return address" was set up
+// in `allocproc` to be `trapret`. `trapret` will then restore the user registers
+// from the process's trap frame and switch to user mode, starting the execution
+// of the user program (e.g., `initcode.S` for the first process, or the instruction
+// after `fork()` for a normally forked child).
 void
 forkret(void)
 {
@@ -412,8 +488,26 @@ forkret(void)
   // Return to "caller", actually trapret (see allocproc).
 }
 
-// Atomically release lock and sleep on chan.
-// Reacquires lock when awakened.
+// Put the current process to sleep on an arbitrary `chan` (channel/condition).
+// This function is called when a process needs to wait for a specific event.
+// - `chan`: An arbitrary pointer used as a "channel" or "wait queue". Processes
+//           sleeping on the same `chan` will be woken up together by `wakeup(chan)`.
+// - `lk`: A spinlock that protects the condition being waited for. This lock *must*
+//         be held by the caller.
+// Operation:
+//  1. The current process (`p = myproc()`) is identified.
+//  2. Critical section: If `lk` is not `&ptable.lock`, `ptable.lock` is acquired,
+//     then `lk` is released. This order is crucial to prevent lost wakeups.
+//     If `lk` is `&ptable.lock`, it's already held.
+//  3. The process's state is set to `SLEEPING`, and `p->chan` is set to `chan`.
+//  4. `sched()` is called to relinquish the CPU and switch to the scheduler.
+//  5. When the process is awakened by `wakeup(chan)` (which sets its state to RUNNABLE),
+//     it will eventually be scheduled again, and `sched()` will return here.
+//  6. `p->chan` is cleared.
+//  7. The original lock `lk` is reacquired (if it wasn't `&ptable.lock`). If `lk` was
+//     `&ptable.lock`, it's released by the caller of `sleep` or by `sched`'s caller.
+// The atomicity of releasing `lk` and going to sleep (relative to `wakeup`) is
+// ensured by holding `ptable.lock` during the state change and `sched()` call.
 void
 sleep(void *chan, struct spinlock *lk)
 {
@@ -452,8 +546,11 @@ sleep(void *chan, struct spinlock *lk)
 }
 
 //PAGEBREAK!
-// Wake up all processes sleeping on chan.
-// The ptable lock must be held.
+// Wake up all processes sleeping on the given `chan` (channel/condition).
+// This is an internal helper function. The caller *must* hold `ptable.lock`.
+// It iterates through the `ptable`. If a process is `SLEEPING` and its
+// `p->chan` matches the given `chan`, its state is changed to `RUNNABLE`.
+// These newly RUNNABLE processes will then be eligible to be picked by the scheduler.
 static void
 wakeup1(void *chan)
 {
@@ -473,9 +570,17 @@ wakeup(void *chan)
   release(&ptable.lock);
 }
 
-// Kill the process with the given pid.
-// Process won't exit until it returns
-// to user space (see trap in trap.c).
+// Kill the process with the given `pid`.
+// This is the implementation of the `kill()` system call.
+// - It searches the `ptable` for a process with the matching `pid`.
+// - If found, it sets the `p->killed` flag of that process to 1.
+// - If the target process is currently `SLEEPING`, its state is changed to `RUNNABLE`.
+//   This ensures that a sleeping process (e.g., waiting for I/O) gets a chance
+//   to run, notice its `killed` flag (in `trap()`), and exit.
+// A process doesn't die immediately when `kill()` is called on it.
+// The `p->killed` flag is checked when the process traps into the kernel (e.g.,
+// on a system call or timer interrupt). If the flag is set, the process then calls `exit()`.
+// Returns 0 on success (process found and marked), -1 if no process with `pid` exists.
 int
 kill(int pid)
 {
