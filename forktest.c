@@ -1,33 +1,30 @@
-// Test that fork fails gracefully and that wait works correctly.
-// This is a tiny executable, allowing the test to potentially fill the process table
-// if N is large enough, thus testing resource limits.
+// 测试 fork 是否能优雅地失败以及 wait 是否正常工作。
+// 这是一个微小的可执行文件，如果N足够大，测试可能会填满进程表，
+// 从而测试资源限制。
 
 #include "types.h"
 #include "stat.h"
 #include "user.h"
 
-#define N  1000 // Defines the number of child processes to attempt to create.
+#define N  1000 // 定义尝试创建的子进程数量。
 
-// A simple user-level printf implementation that writes to a given file descriptor.
-// Used here to print messages to the console (fd 1).
+// 一个简单的用户级printf实现，用于向给定的文件描述符写入。
+// 此处用于向控制台(fd 1)打印消息。
 void
 printf(int fd, const char *s, ...)
 {
   write(fd, s, strlen(s));
 }
 
-// The main fork test logic.
-// This function tests several aspects of process creation and termination:
-// 1. Process Creation (`fork`): It repeatedly calls `fork()` to create child processes.
-//    - It checks if `fork()` returns a negative value, which indicates failure (e.g., process table full).
-//    - In the child process (`pid == 0`), it calls `exit()` immediately.
-// 2. Process Limits: By attempting to create `N` processes, it can test how the system
-//    handles reaching the maximum number of processes (`NPROC` in kernel).
-// 3. Process Termination (`exit` and `wait`):
-//    - After attempting to create children, the parent process calls `wait()` to clean up
-//      each child that was successfully created.
-//    - It checks if `wait()` behaves as expected (e.g., returns an error if called when no
-//      children are left).
+// fork测试的主要逻辑。
+// 此函数测试进程创建和终止的几个方面：
+// 1. 进程创建 (`fork`): 它重复调用 `fork()` 来创建子进程。
+//    - 它检查 `fork()` 是否返回负值，这表示失败（例如，进程表已满）。
+//    - 在子进程中 (`pid == 0`)，它立即调用 `exit()`。
+// 2. 进程限制: 通过尝试创建 `N` 个进程，它可以测试系统如何处理达到最大进程数 (`NPROC` 内核限制) 的情况。
+// 3. 进程终止 (`exit` 和 `wait`):
+//    - 在尝试创建子进程后，父进程调用 `wait()` 来清理每个成功创建的子进程。
+//    - 它检查 `wait()` 是否按预期工作（例如，当没有子进程时调用是否返回错误）。
 void
 forktest(void)
 {
@@ -35,48 +32,48 @@ forktest(void)
 
   printf(1, "fork test\n");
 
-  // Loop to attempt to create N child processes.
+  // 尝试创建N个子进程的循环。
   for(n=0; n<N; n++){
-    pid = fork(); // Attempt to create a child.
-    if(pid < 0)   // If fork() fails (e.g., process table is full)...
-      break;      // ...stop trying to create more children.
-    if(pid == 0)  // If this is the child process...
-      exit();     // ...the child exits immediately.
+    pid = fork(); // 尝试创建一个子进程。
+    if(pid < 0)   // 如果fork()失败（例如，进程表已满）...
+      break;      // ...停止尝试创建更多子进程。
+    if(pid == 0)  // 如果这是子进程...
+      exit();     // ...子进程立即退出。
   }
 
-  // After the loop, 'n' holds the number of children successfully created.
-  // If 'n' is equal to 'N', it means fork() never returned an error.
-  // This might be unexpected if N is very large (e.g., > NPROC), as fork should fail.
-  // The original comment "fork claimed to work N times!" suggests this is a check
-  // for whether fork correctly reports failure when it should.
+  // 循环之后，'n' 保存成功创建的子进程数量。
+  // 如果 'n' 等于 'N'，则意味着fork()从未返回错误。
+  // 如果N非常大（例如 > NPROC），这可能出乎意料，因为fork应该失败。
+  // 原始注释 "fork claimed to work N times!" 表明这是一个检查
+  // fork 是否在应该失败时正确报告失败。
   if(n == N){
-    printf(1, "fork claimed to work N times!\n", N); // This could indicate an issue if N > NPROC.
-    exit(); // Parent exits.
+    printf(1, "fork claimed to work N times!\n", N); // 如果 N > NPROC，这可能表明存在问题。
+    exit(); // 父进程退出。
   }
 
-  // Parent process now waits for all 'n' successfully created children to exit.
+  // 父进程现在等待所有 'n' 个成功创建的子进程退出。
   for(; n > 0; n--){
-    if(wait() < 0){ // wait() should return the PID of an exited child. Negative means error.
-      printf(1, "wait stopped early\n"); // Error: wait() failed before all children were collected.
+    if(wait() < 0){ // wait() 应该返回已退出子进程的PID。负值表示错误。
+      printf(1, "wait stopped early\n"); // 错误：wait() 在所有子进程被回收之前失败。
       exit();
     }
   }
 
-  // After all children created in the loop have been waited for,
-  // another call to wait() should return -1 (or another error code),
-  // indicating that there are no more children to wait for.
+  // 在等待循环中创建的所有子进程之后，
+  // 再次调用wait()应该返回-1（或其他错误代码），
+  // 表示没有更多子进程可等待。
   if(wait() != -1){
-    printf(1, "wait got too many\n"); // Error: wait() succeeded when it should have failed.
+    printf(1, "wait got too many\n"); // 错误：wait() 在应该失败时成功了。
     exit();
   }
 
-  printf(1, "fork test OK\n"); // If all tests pass.
+  printf(1, "fork test OK\n"); // 如果所有测试都通过。
 }
 
-// Main entry point for the forktest user program.
+// forktest 用户程序的主入口点。
 int
 main(void)
 {
-  forktest(); // Run the fork test.
-  exit();     // Ensure the program exits cleanly after the test.
+  forktest(); // 运行fork测试。
+  exit();     // 确保程序在测试后干净地退出。
 }

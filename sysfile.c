@@ -1,25 +1,23 @@
-// This file implements the kernel-side of system calls that are related to
-// file and file system operations.
+// 本文件实现了与文件和文件系统操作相关的系统调用的内核端。
 //
-// These functions typically perform the following steps:
-// 1. Argument Fetching and Validation:
-//    - Use helper functions like `argint`, `argstr`, `argptr` (from syscall.c)
-//      to retrieve arguments (e.g., file descriptors, paths, pointers, sizes)
-//      from the user process's stack and memory.
-//    - Validate these arguments (e.g., check if file descriptors are valid,
-//      if pointers are within user space, if paths are reasonable).
-// 2. Calling Lower-Level File System Functions:
-//    - Invoke functions from `file.c` (for file descriptor and open file table
-//      operations, like `filealloc`, `fileclose`, `fileread`, `filewrite`)
-//      and `fs.c` (for inode and block-level operations, like `namei`,
-//      `dirlink`, `create`, `readi`, `writei`).
-// 3. Transaction Management:
-//    - Many file system operations that modify on-disk structures (e.g., creating
-//      a file, linking, unlinking) are wrapped in `begin_op()` and `end_op()`
-//      to ensure atomicity and crash recovery via the logging system (log.c).
-// 4. Return Value:
-//    - Return an appropriate value to the user (e.g., number of bytes read/written,
-//      a new file descriptor, 0 on success, or -1 on error).
+// 这些函数通常执行以下步骤：
+// 1. 参数获取和验证：
+//    - 使用像 `argint`、`argstr`、`argptr`（来自 syscall.c）这样的辅助函数
+//      从用户进程的栈和内存中检索参数（例如，文件描述符、路径、指针、大小）。
+//    - 验证这些参数（例如，检查文件描述符是否有效，
+//      指针是否在用户空间内，路径是否合理）。
+// 2. 调用底层文件系统函数：
+//    - 调用 `file.c` 中的函数（用于文件描述符和打开文件表操作，
+//      如 `filealloc`、`fileclose`、`fileread`、`filewrite`）
+//      和 `fs.c` 中的函数（用于 inode 和块级操作，如 `namei`、
+//      `dirlink`、`create`、`readi`、`writei`）。
+// 3. 事务管理：
+//    - 许多修改磁盘结构的文件系统操作（例如，创建文件、链接、取消链接）
+//      都包装在 `begin_op()` 和 `end_op()` 中，
+//      以通过日志系统（log.c）确保原子性和崩溃恢复。
+// 4. 返回值：
+//    -向用户返回适当的值（例如，读取/写入的字节数、新的文件描述符、
+//      成功时返回0，或错误时返回-1）。
 
 #include "types.h"
 #include "defs.h"
@@ -33,17 +31,15 @@
 #include "file.h"
 #include "fcntl.h"
 
-// Fetch the n-th word-sized system call argument, which is expected to be a
-// file descriptor (fd).
-// - `n`: The argument number (0-indexed).
-// - `pfd`: If not null, the integer value of the fd is stored here.
-// - `pf`: If not null, a pointer to the corresponding `struct file` from the
-//         current process's open file table (`myproc()->ofile[fd]`) is stored here.
-// Returns 0 on success.
-// Returns -1 if:
-//   - `argint` fails to fetch the fd value.
-//   - The fd is out of bounds (less than 0 or greater than or equal to NOFILE).
-//   - The process does not have a file open for that fd (`myproc()->ofile[fd] == 0`).
+// 获取第n个字大小的系统调用参数，该参数应为一个文件描述符(fd)。
+// - `n`: 参数编号（从0开始）。
+// - `pfd`: 如果不为null，则fd的整数值存储在此处。
+// - `pf`: 如果不为null，则指向当前进程打开文件表 (`myproc()->ofile[fd]`) 中相应 `struct file` 的指针存储在此处。
+// 成功返回0。
+// 如果出现以下情况，则返回-1：
+//   - `argint` 获取fd值失败。
+//   - fd 超出范围（小于0或大于等于NOFILE）。
+//   - 进程没有为该fd打开文件 (`myproc()->ofile[fd] == 0`)。
 static int
 argfd(int n, int *pfd, struct file **pf)
 {
@@ -61,15 +57,14 @@ argfd(int n, int *pfd, struct file **pf)
   return 0;
 }
 
-// Allocate an unused file descriptor in the current process's open file table
-// (`myproc()->ofile`) and assign the given `struct file *f` to it.
-// This function effectively gives the process a handle (the fd) to an already
-// opened file structure `f`.
-// The `struct file *f` should already have its reference count incremented by the caller
-// if it's a new reference (e.g., in `sys_open`), or it's being duplicated (`sys_dup`).
-// `fdalloc` itself does not modify `f->ref`.
-// Returns the allocated file descriptor (an integer) on success.
-// Returns -1 if no free file descriptors are available in the process's table.
+// 在当前进程的打开文件表 (`myproc()->ofile`) 中分配一个未使用的文件描述符，
+// 并将给定的 `struct file *f` 分配给它。
+// 此函数有效地为进程提供了一个已打开文件结构 `f` 的句柄 (fd)。
+// 如果是对 `struct file *f` 的新引用（例如，在 `sys_open` 中），或者它正在被复制 (`sys_dup`)，
+// 则调用者应已增加其引用计数。
+// `fdalloc` 本身不修改 `f->ref`。
+// 成功时返回分配的文件描述符（一个整数）。
+// 如果进程表中没有可用的空闲文件描述符，则返回-1。
 static int
 fdalloc(struct file *f)
 {
@@ -85,12 +80,12 @@ fdalloc(struct file *f)
   return -1;
 }
 
-// System call: dup(int fd)
-// Duplicates an existing file descriptor.
-// - Fetches the file descriptor argument using `argfd`.
-// - Allocates a new file descriptor using `fdalloc`.
-// - Increments the reference count of the underlying `struct file` using `filedup`.
-// Returns the new file descriptor on success, -1 on error.
+// 系统调用：dup(int fd)
+// 复制一个现有的文件描述符。
+// - 使用 `argfd` 获取文件描述符参数。
+// - 使用 `fdalloc` 分配一个新的文件描述符。
+// - 使用 `filedup` 增加底层 `struct file` 的引用计数。
+// 成功时返回新的文件描述符，错误时返回-1。
 int
 sys_dup(void)
 {
@@ -107,11 +102,11 @@ sys_dup(void)
   return fd;  // Return new fd.
 }
 
-// System call: read(int fd, char *buf, int n)
-// Reads up to `n` bytes from the file descriptor `fd` into buffer `buf`.
-// - Fetches arguments: fd, user buffer pointer `p`, and count `n`.
-// - Calls `fileread` (from file.c) to perform the read operation.
-// Returns the number of bytes read, or -1 on error.
+// 系统调用：read(int fd, char *buf, int n)
+// 从文件描述符 `fd` 读取最多 `n` 字节到缓冲区 `buf`。
+// - 获取参数：fd、用户缓冲区指针 `p` 和计数 `n`。
+// - 调用 `fileread` (来自 file.c) 执行读取操作。
+// 返回读取的字节数，错误时返回-1。
 int
 sys_read(void)
 {
@@ -125,11 +120,11 @@ sys_read(void)
   return fileread(f, p, n);
 }
 
-// System call: write(int fd, char *buf, int n)
-// Writes `n` bytes from buffer `buf` to the file descriptor `fd`.
-// - Fetches arguments: fd, user buffer pointer `p`, and count `n`.
-// - Calls `filewrite` (from file.c) to perform the write operation.
-// Returns the number of bytes written, or -1 on error.
+// 系统调用：write(int fd, char *buf, int n)
+// 将缓冲区 `buf` 中的 `n` 字节写入文件描述符 `fd`。
+// - 获取参数：fd、用户缓冲区指针 `p` 和计数 `n`。
+// - 调用 `filewrite` (来自 file.c) 执行写入操作。
+// 返回写入的字节数，错误时返回-1。
 int
 sys_write(void)
 {
@@ -143,13 +138,13 @@ sys_write(void)
   return filewrite(f, p, n);
 }
 
-// System call: close(int fd)
-// Closes a file descriptor.
-// - Fetches the file descriptor `fd` and its `struct file *f`.
-// - Removes the fd from the current process's open file table (`myproc()->ofile[fd] = 0`).
-// - Calls `fileclose` (from file.c) to decrement the `struct file`'s reference count
-//   and potentially close the underlying file/pipe if the ref count reaches zero.
-// Returns 0 on success, -1 on error.
+// 系统调用：close(int fd)
+// 关闭一个文件描述符。
+// - 获取文件描述符 `fd` 及其 `struct file *f`。
+// - 从当前进程的打开文件表中移除 fd (`myproc()->ofile[fd] = 0`)。
+// - 调用 `fileclose` (来自 file.c) 以减少 `struct file` 的引用计数，
+//   如果引用计数达到零，则可能关闭底层文件/管道。
+// 成功返回0，错误返回-1。
 int
 sys_close(void)
 {
@@ -164,12 +159,12 @@ sys_close(void)
   return 0;
 }
 
-// System call: fstat(int fd, struct stat *st)
-// Gets status information (metadata) about an open file.
-// - Fetches the file descriptor `fd` and its `struct file *f`.
-// - Fetches a user pointer `st` to a `struct stat` where results will be stored.
-// - Calls `filestat` (from file.c) to populate the `struct stat`.
-// Returns 0 on success, -1 on error.
+// 系统调用：fstat(int fd, struct stat *st)
+// 获取有关打开文件的状态信息（元数据）。
+// - 获取文件描述符 `fd` 及其 `struct file *f`。
+// - 获取一个用户指针 `st`，指向用于存储结果的 `struct stat`。
+// - 调用 `filestat` (来自 file.c) 来填充 `struct stat`。
+// 成功返回0，错误返回-1。
 int
 sys_fstat(void)
 {
@@ -182,18 +177,18 @@ sys_fstat(void)
   return filestat(f, st);
 }
 
-// System call: link(char *oldname, char *newname)
-// Creates a new hard link `newname` that points to the same inode as `oldname`.
-// - Fetches string arguments `old` and `new` paths.
-// - Begins a file system transaction (`begin_op`).
-// - Looks up the inode for `oldname` using `namei`.
-// - Checks that `oldname` is not a directory (cannot hard link directories).
-// - Increments `ip->nlink` for the inode and updates it on disk (`iupdate`).
-// - Looks up the parent directory inode for `newname` using `nameiparent`.
-// - Calls `dirlink` to create the new directory entry for `name` pointing to `ip->inum`.
-// - Releases inodes and ends the transaction.
-// - Handles error cases by decrementing `nlink` if steps fail.
-// Returns 0 on success, -1 on error.
+// 系统调用：link(char *oldname, char *newname)
+// 创建一个新的硬链接 `newname`，指向与 `oldname` 相同的 inode。
+// - 获取字符串参数 `old` 和 `new` 路径。
+// - 开始文件系统事务 (`begin_op`)。
+// - 使用 `namei` 查找 `oldname` 的 inode。
+// - 检查 `oldname` 不是目录（不能硬链接目录）。
+// - 增加 inode 的 `ip->nlink` 并在磁盘上更新它 (`iupdate`)。
+// - 使用 `nameiparent` 查找 `newname` 的父目录 inode。
+// - 调用 `dirlink` 为指向 `ip->inum` 的 `name` 创建新的目录条目。
+// - 释放 inode 并结束事务。
+// - 如果步骤失败，通过减少 `nlink` 来处理错误情况。
+// 成功返回0，错误返回-1。
 int
 sys_link(void)
 {
@@ -243,7 +238,7 @@ bad:
   return -1;
 }
 
-// Is the directory dp empty except for "." and ".." ?
+// 目录 dp 是否为空（除了 "." 和 ".."）？
 static int
 isdirempty(struct inode *dp)
 {
@@ -260,21 +255,21 @@ isdirempty(struct inode *dp)
 }
 
 //PAGEBREAK!
-// System call: unlink(char *pathname)
-// Removes a name (link) from the file system.
-// If this is the last link to an inode, the inode and its data are freed.
-// - Fetches the `path` argument.
-// - Begins a file system transaction.
-// - Looks up the parent directory `dp` of `path` and the final name component.
-// - Checks that `name` is not "." or "..".
-// - Looks up the inode `ip` for `name` within `dp`.
-// - If `ip` is a directory, checks if it's empty (except for "." and "..").
-// - Clears the directory entry for `name` in `dp` by writing zeros.
-// - If `ip` was a directory, decrements `dp->nlink` (for the ".." entry in child).
-// - Decrements `ip->nlink`.
-// - Updates inodes on disk and releases them. `iput` will handle freeing if `nlink` is 0.
-// - Ends the transaction.
-// Returns 0 on success, -1 on error.
+// 系统调用：unlink(char *pathname)
+// 从文件系统中移除一个名称（链接）。
+// 如果这是指向 inode 的最后一个链接，则释放该 inode 及其数据。
+// - 获取 `path` 参数。
+// - 开始文件系统事务。
+// - 查找 `path` 的父目录 `dp` 和最终名称组件。
+// - 检查 `name` 不是 "." 或 ".."。
+// - 在 `dp` 中查找 `name` 的 inode `ip`。
+// - 如果 `ip` 是目录，则检查它是否为空（除了 "." 和 ".."）。
+// - 通过写入零来清除 `dp` 中 `name` 的目录条目。
+// - 如果 `ip` 是目录，则减少 `dp->nlink`（用于子目录中的 ".." 条目）。
+// - 减少 `ip->nlink`。
+// - 更新磁盘上的 inode 并释放它们。如果 `nlink` 为0，`iput` 将处理释放。
+// - 结束事务。
+// 成功返回0，错误返回-1。
 int
 sys_unlink(void)
 {
@@ -332,28 +327,28 @@ bad:
   return -1;
 }
 
-// Helper function: create a new file or directory or device file.
-// - `path`: The full path to the new file/directory.
-// - `type`: T_FILE, T_DIR, or T_DEV.
-// - `major`, `minor`: Device numbers if type is T_DEV.
+// 辅助函数：创建一个新的文件、目录或设备文件。
+// - `path`: 新文件/目录的完整路径。
+// - `type`: T_FILE, T_DIR, 或 T_DEV。
+// - `major`, `minor`: 如果类型是 T_DEV，则为设备号。
 //
-// Operation:
-// 1. Find parent directory `dp` of `path` and the final name component.
-// 2. Lock `dp`.
-// 3. Check if `name` already exists:
-//    - If it exists and is a file, and `type` is T_FILE, return existing inode (for O_CREATE).
-//    - Otherwise (exists but wrong type, or creating a dir/dev that exists), fail.
-// 4. If it doesn't exist, allocate a new inode `ip` of the given `type` using `ialloc`.
-// 5. Lock `ip`, set its major/minor (if T_DEV), nlink=1, and update it on disk.
-// 6. If `type` is T_DIR:
-//    - Increment `dp->nlink` (for the ".." entry in the new directory).
-//    - Update `dp` on disk.
-//    - Create "." and ".." entries within the new directory `ip`.
-// 7. Link the new inode `ip` into the parent directory `dp` under `name`.
-// 8. Unlock and release `dp`.
-// Returns the locked inode `ip` on success, 0 on failure.
-// The caller is responsible for unlocking `ip` (e.g., via `iunlockput` if it's an intermediate step
-// or just `iunlock` if returning the inode to be used further by `sys_open`).
+// 操作：
+// 1. 找到 `path` 的父目录 `dp` 和最终名称组件。
+// 2. 锁定 `dp`。
+// 3. 检查 `name` 是否已存在：
+//    - 如果它存在并且是一个文件，并且 `type` 是 T_FILE，则返回现有 inode (用于 O_CREATE)。
+//    - 否则（存在但类型错误，或正在创建的目录/设备已存在），失败。
+// 4. 如果它不存在，则使用 `ialloc` 分配一个给定 `type` 的新 inode `ip`。
+// 5. 锁定 `ip`，设置其主/次设备号（如果为 T_DEV），nlink=1，并在磁盘上更新它。
+// 6. 如果 `type` 是 T_DIR：
+//    - 增加 `dp->nlink`（用于新目录中的 ".." 条目）。
+//    - 更新磁盘上的 `dp`。
+//    - 在新目录 `ip` 中创建 "." 和 ".." 条目。
+// 7. 将新的 inode `ip` 链接到父目录 `dp` 下的 `name`。
+// 8. 解锁并释放 `dp`。
+// 成功时返回锁定的 inode `ip`，失败时返回0。
+// 调用者负责解锁 `ip`（例如，如果是中间步骤，则通过 `iunlockput`；
+// 或者如果返回的 inode 将由 `sys_open` 进一步使用，则只需 `iunlock`）。
 static struct inode*
 create(char *path, short type, short major, short minor)
 {
@@ -407,20 +402,20 @@ create(char *path, short type, short major, short minor)
   return ip; // Return the locked inode for the new file/dir.
 }
 
-// System call: open(char *path, int omode)
-// Opens a file specified by `path` with given open mode `omode` (e.g., O_RDONLY, O_CREATE).
-// - Fetches `path` string and `omode` integer arguments.
-// - Begins a file system transaction.
-// - If `O_CREATE` is specified in `omode`:
-//   - Calls `create()` to create the file (as T_FILE) if it doesn't exist.
-// - Else (not creating):
-//   - Looks up the inode for `path` using `namei`.
-//   - If it's a directory, checks if `omode` is O_RDONLY (directories can only be opened read-only).
-// - Allocates a `struct file` (`f`) and a file descriptor (`fd`).
-// - Initializes `f` (type, inode, offset, readable/writable flags based on `omode`).
-// - Unlocks the inode (it was locked by `create` or `namei`/`ilock`).
-// - Ends the transaction.
-// Returns the file descriptor `fd` on success, -1 on error.
+// 系统调用：open(char *path, int omode)
+// 使用给定的打开模式 `omode`（例如，O_RDONLY, O_CREATE）打开由 `path` 指定的文件。
+// - 获取 `path` 字符串和 `omode` 整数参数。
+// - 开始文件系统事务。
+// - 如果在 `omode` 中指定了 `O_CREATE`：
+//   - 如果文件不存在，则调用 `create()` 创建文件（类型为 T_FILE）。
+// - 否则（不创建）：
+//   - 使用 `namei` 查找 `path` 的 inode。
+//   - 如果是目录，则检查 `omode` 是否为 O_RDONLY（目录只能以只读方式打开）。
+// - 分配一个 `struct file` (`f`) 和一个文件描述符 (`fd`)。
+// - 初始化 `f`（类型、inode、偏移量、基于 `omode` 的可读/可写标志）。
+// - 解锁 inode（它被 `create` 或 `namei`/`ilock` 锁定）。
+// - 结束事务。
+// 成功时返回文件描述符 `fd`，错误时返回-1。
 int
 sys_open(void)
 {
@@ -471,14 +466,14 @@ sys_open(void)
   return fd;
 }
 
-// System call: mkdir(char *path)
-// Creates a new directory specified by `path`.
-// - Fetches `path` string argument.
-// - Begins a transaction.
-// - Calls `create()` with type T_DIR to create the directory inode and its "." and ".." entries.
-// - Unlocks and releases the new directory inode (returned locked by `create`).
-// - Ends the transaction.
-// Returns 0 on success, -1 on error.
+// 系统调用：mkdir(char *path)
+// 创建由 `path` 指定的新目录。
+// - 获取 `path` 字符串参数。
+// - 开始一个事务。
+// - 调用 `create()` 并指定类型 T_DIR 来创建目录 inode 及其 "." 和 ".." 条目。
+// - 解锁并释放新的目录 inode（由 `create` 返回时是锁定的）。
+// - 结束事务。
+// 成功返回0，错误返回-1。
 int
 sys_mkdir(void)
 {
@@ -495,14 +490,14 @@ sys_mkdir(void)
   return 0;
 }
 
-// System call: mknod(char *path, short major, short minor)
-// Creates a special device file specified by `path`.
-// - Fetches `path` string, `major` device number, and `minor` device number arguments.
-// - Begins a transaction.
-// - Calls `create()` with type T_DEV and the given major/minor numbers.
-// - Unlocks and releases the new device file inode.
-// - Ends the transaction.
-// Returns 0 on success, -1 on error.
+// 系统调用：mknod(char *path, short major, short minor)
+// 创建由 `path` 指定的特殊设备文件。
+// - 获取 `path` 字符串、主设备号 `major` 和次设备号 `minor` 参数。
+// - 开始一个事务。
+// - 调用 `create()` 并指定类型 T_DEV 以及给定的主/次设备号。
+// - 解锁并释放新的设备文件 inode。
+// - 结束事务。
+// 成功返回0，错误返回-1。
 int
 sys_mknod(void)
 {
@@ -523,17 +518,17 @@ sys_mknod(void)
   return 0;
 }
 
-// System call: chdir(char *path)
-// Changes the current working directory of the calling process to `path`.
-// - Fetches `path` string argument.
-// - Begins a transaction.
-// - Looks up the inode for `path` using `namei`.
-// - Locks the inode and checks if it's a directory (T_DIR).
-// - Unlocks the inode.
-// - Releases the old current working directory inode (`curproc->cwd`) using `iput`.
-// - Ends the transaction.
-// - Sets `curproc->cwd` to the new directory inode.
-// Returns 0 on success, -1 on error.
+// 系统调用：chdir(char *path)
+// 将调用进程的当前工作目录更改为 `path`。
+// - 获取 `path` 字符串参数。
+// - 开始一个事务。
+// - 使用 `namei` 查找 `path` 的 inode。
+// - 锁定 inode 并检查它是否是目录 (T_DIR)。
+// - 解锁 inode。
+// - 使用 `iput` 释放旧的当前工作目录 inode (`curproc->cwd`)。
+// - 结束事务。
+// - 将 `curproc->cwd` 设置为新的目录 inode。
+// 成功返回0，错误返回-1。
 int
 sys_chdir(void)
 {
@@ -559,14 +554,14 @@ sys_chdir(void)
   return 0;
 }
 
-// System call: exec(char *path, char **argv)
-// Replaces the current process's memory image with a new program.
-// - Fetches `path` string (executable to run) and `uargv` (user pointer to array of argument strings).
-// - Iteratively fetches argument strings from the user `argv` array:
-//   - `fetchint` gets each `char*` pointer from `uargv`.
-//   - `fetchstr` validates each argument string.
-// - Calls `exec()` (from exec.c) to perform the actual replacement.
-// Returns -1 on error (exec itself does not return on success).
+// 系统调用：exec(char *path, char **argv)
+// 用新程序替换当前进程的内存映像。
+// - 获取 `path` 字符串（要运行的可执行文件）和 `uargv`（指向参数字符串数组的用户指针）。
+// - 从用户 `argv` 数组中迭代获取参数字符串：
+//   - `fetchint` 从 `uargv` 获取每个 `char*` 指针。
+//   - `fetchstr` 验证每个参数字符串。
+// - 调用 `exec()` (来自 exec.c) 来执行实际的替换。
+// 错误时返回-1（exec 本身成功时不返回）。
 int
 sys_exec(void)
 {
@@ -597,15 +592,15 @@ sys_exec(void)
   return exec(path, argv); // Call the exec implementation.
 }
 
-// System call: pipe(int pipefd[2])
-// Creates a pipe, a unidirectional data channel.
-// - Fetches user pointer `fd` to an array of two integers where the new file descriptors will be stored.
-// - Calls `pipealloc()` (from pipe.c) to allocate a pipe structure and get two `struct file`
-//   pointers (`rf` for read end, `wf` for write end).
-// - Allocates two file descriptors (`fd0` for read, `fd1` for write) using `fdalloc`.
-// - If allocation fails at any step, cleans up previously allocated resources.
-// - Stores `fd0` and `fd1` into the user-provided array `fd`.
-// Returns 0 on success, -1 on error.
+// 系统调用：pipe(int pipefd[2])
+// 创建一个管道，一个单向数据通道。
+// - 获取用户指针 `fd`，它指向一个包含两个整数的数组，新的文件描述符将存储在此处。
+// - 调用 `pipealloc()` (来自 pipe.c) 来分配一个管道结构并获取两个 `struct file` 指针
+//   （`rf` 用于读取端，`wf` 用于写入端）。
+// - 使用 `fdalloc` 分配两个文件描述符（`fd0` 用于读取，`fd1` 用于写入）。
+// - 如果在任何步骤分配失败，则清理先前分配的资源。
+// - 将 `fd0` 和 `fd1` 存储到用户提供的数组 `fd` 中。
+// 成功返回0，错误返回-1。
 int
 sys_pipe(void)
 {

@@ -8,76 +8,55 @@
 #include "traps.h"
 #include "spinlock.h"
 
-// This file handles traps, interrupts, and exceptions that occur during kernel or user execution.
+// 本文件处理在内核或用户执行期间发生的陷阱、中断和异常。
 //
-// Trap/Interrupt Handling Overview:
-// 1. IDT Setup (`tvinit`, `idtinit`):
-//    - The Interrupt Descriptor Table (IDT) is a CPU structure that maps each interrupt
-//      vector (0-255) to a gate descriptor.
-//    - `tvinit()` populates the `idt` array with gate descriptors. Each gate points to an
-//      assembly language entry point in `vectors.S` (via the `vectors[]` array).
-//    - For system calls (`T_SYSCALL`), a trap gate is set up that allows user-mode
-//      code to trigger it using the `INT` instruction. Other gates are interrupt gates.
-//    - `idtinit()` loads the IDT register (IDTR) with the address and size of the `idt` table
-//      using the `lidt` instruction. This makes the IDT active.
+// 陷阱/中断处理概述：
+// 1. IDT 设置 (`tvinit`, `idtinit`):
+//    - 中断描述符表 (IDT) 是一个 CPU 结构，它将每个中断向量 (0-255) 映射到一个门描述符。
+//    - `tvinit()` 用门描述符填充 `idt` 数组。每个门指向 `vectors.S` 中的一个汇编语言入口点（通过 `vectors[]` 数组）。
+//    - 对于系统调用 (`T_SYSCALL`)，设置一个陷阱门，允许用户模式代码使用 `INT` 指令触发它。其他门是中断门。
+//    - `idtinit()` 使用 `lidt` 指令将 `idt` 表的地址和大小加载到 IDT 寄存器 (IDTR) 中。这使得 IDT 生效。
 //
-// 2. Trap/Interrupt Occurs:
-//    - When an interrupt (e.g., timer, disk) or an exception (e.g., page fault, divide by zero)
-//      occurs, or when an `INT` instruction is executed:
-//      a. The CPU pushes information onto the current stack (kernel stack if already in kernel,
-//         or switches to kernel stack if in user mode). This includes EFLAGS, CS, EIP, and
-//         sometimes an error code.
-//      b. The CPU disables further interrupts (on the current CPU).
-//      c. It uses the interrupt vector number to look up the corresponding gate in the IDT.
-//      d. It jumps to the handler address specified in the IDT gate.
+// 2. 陷阱/中断发生：
+//    - 当发生中断（例如，定时器、磁盘）或异常（例如，页错误、除以零），或执行 `INT` 指令时：
+//      a. CPU 将信息压入当前栈（如果在内核中则为内核栈，如果在用户模式则切换到内核栈）。这包括 EFLAGS、CS、EIP，有时还有一个错误代码。
+//      b. CPU 禁用进一步的中断（在当前 CPU 上）。
+//      c. 它使用中断向量号在 IDT 中查找相应的门。
+//      d. 它跳转到 IDT 门中指定的处理程序地址。
 //
-// 3. Assembly Handler (`vectors.S` - `alltraps`):
-//    - The IDT entries point to individual assembly stubs in `vectors.S` (part of `vectors[]`).
-//    - These stubs typically push a trap number and an error code (if not already pushed by CPU)
-//      onto the stack, then jump to a common assembly routine (`alltraps`).
-//    - `alltraps` saves all general-purpose registers, sets up segment registers for kernel mode,
-//      and creates a `struct trapframe` on the stack. It then calls the C function `trap()`.
+// 3. 汇编处理程序 (`vectors.S` - `alltraps`):
+//    - IDT 条目指向 `vectors.S` 中的单个汇编存根（`vectors[]` 的一部分）。
+//    - 这些存根通常将陷阱号和错误代码（如果 CPU 尚未压入）压入栈，然后跳转到一个通用的汇编例程 (`alltraps`)。
+//    - `alltraps` 保存所有通用寄存器，为内核模式设置段寄存器，并在栈上创建一个 `struct trapframe`。然后它调用 C 函数 `trap()`。
 //
-// 4. C Handler (`trap()` in this file):
-//    - `trap()` receives a pointer to the `struct trapframe`.
-//    - It uses `tf->trapno` to determine the cause of the trap.
-//    - It dispatches to specific handlers or takes actions based on the trap number:
-//      - System calls: Calls `syscall()` (see syscall.c).
-//      - Hardware interrupts (timer, IDE, keyboard, UART): Calls respective interrupt
-//        handlers (e.g., `ideintr()`, `kbdintr()`). After the device-specific handler,
-//        `lapiceoi()` is called to signal End-Of-Interrupt to the local APIC.
-//      - Page Faults: In xv6, a page fault from user space (if not a copy-on-write scenario,
-//        which isn't fully implemented in base xv6) usually indicates a bug in the user
-//        program or an attempt to access invalid memory. The default handler in `trap()`
-//        will typically kill such a process. A page fault in kernel space is a kernel bug
-//        and causes a panic.
-//      - Other exceptions/spurious interrupts: Logged, and potentially the process is killed
-//        or the system panics.
-//    - `trap()` also handles forcing process exit if `myproc()->killed` is set and ensures
-//      processes yield the CPU on timer interrupts for preemptive multitasking.
+// 4. C 处理程序 (`trap()` 在此文件中):
+//    - `trap()` 接收一个指向 `struct trapframe` 的指针。
+//    - 它使用 `tf->trapno` 来确定陷阱的原因。
+//    - 它根据陷阱号分派到特定的处理程序或采取行动：
+//      - 系统调用：调用 `syscall()` (参见 syscall.c)。
+//      - 硬件中断（定时器、IDE、键盘、UART）：调用各自的中断处理程序（例如 `ideintr()`, `kbdintr()`）。在特定于设备的处理程序之后，调用 `lapiceoi()` 以向本地 APIC 发送中断结束信号。
+//      - 页错误：在 xv6 中，来自用户空间的页错误（如果不是写时复制情景，这在基本 xv6 中未完全实现）通常表示用户程序中的错误或尝试访问无效内存。`trap()` 中的默认处理程序通常会终止此类进程。内核空间中的页错误是内核错误，会导致 panic。
+//      - 其他异常/伪中断：被记录，并可能终止进程或导致系统 panic。
+//    - 如果设置了 `myproc()->killed`，`trap()` 还处理强制进程退出，并确保进程在定时器中断时让出 CPU 以实现抢占式多任务处理。
 //
-// 5. Return from Trap:
-//    - After `trap()` returns, control goes back to `alltraps` in `vectors.S`.
-//    - `alltraps` restores saved registers from the trap frame and executes `iret`,
-//      which returns control to the point where the interrupt/exception occurred,
-//      restoring EFLAGS, CS, and EIP, and returning to user mode if the trap
-//      originated there.
+// 5. 从陷阱返回：
+//    - `trap()` 返回后，控制权交还给 `vectors.S` 中的 `alltraps`。
+//    - `alltraps` 从陷阱帧中恢复保存的寄存器并执行 `iret`，这将控制权返回到中断/异常发生点，恢复 EFLAGS、CS 和 EIP，如果陷阱源于用户模式，则返回用户模式。
 
-// Interrupt Descriptor Table (IDT), shared by all CPUs.
-// It contains 256 entries, each defining how a specific interrupt vector is handled.
+// 中断描述符表 (IDT)，由所有 CPU 共享。
+// 它包含256个条目，每个条目定义了如何处理特定的中断向量。
 struct gatedesc idt[256];
-extern uint vectors[];  // Array of 256 entry pointers, defined in vectors.S. Each points to an assembly handler.
+extern uint vectors[];  // 256个入口指针数组，在 vectors.S 中定义。每个指针指向一个汇编处理程序。
 struct spinlock tickslock; // Lock to protect the global `ticks` counter.
 uint ticks;                // Global counter incremented by timer interrupts, used for scheduling and sleep.
 
-// Initialize the Interrupt Descriptor Table (IDT).
-// This function populates the `idt` array with gate descriptors for all 256 possible interrupt vectors.
-// - For most vectors, it sets up an interrupt gate pointing to the corresponding assembly
-//   routine in `vectors[]` (from vectors.S), running in kernel mode (SEG_KCODE<<3).
-//   The privilege level (DPL) is 0, meaning only kernel mode can trigger these via INT instruction (but they are usually hardware/exception triggered).
-// - For the system call vector (`T_SYSCALL`), it sets up a trap gate with DPL_USER (privilege level 3),
-//   allowing user-mode code to trigger this interrupt using the `INT T_SYSCALL` instruction.
-// It also initializes `tickslock`.
+// 初始化中断描述符表 (IDT)。
+// 此函数为所有256个可能的中断向量填充 `idt` 数组的门描述符。
+// - 对于大多数向量，它设置一个中断门，指向 `vectors[]` (来自 vectors.S) 中相应的汇编例程，在内核模式 (SEG_KCODE<<3)下运行。
+//   特权级别 (DPL) 为0，意味着只有内核模式可以通过INT指令触发这些中断（但它们通常由硬件/异常触发）。
+// - 对于系统调用向量 (`T_SYSCALL`)，它设置一个陷阱门，DPL_USER（特权级别3），
+//   允许用户模式代码使用 `INT T_SYSCALL` 指令触发此中断。
+// 它还初始化 `tickslock`。
 void
 tvinit(void)
 {
@@ -91,9 +70,9 @@ tvinit(void)
   initlock(&tickslock, "time"); // Initialize the lock for the global ticks counter.
 }
 
-// Load the IDT into the CPU's IDTR register.
-// This function is called once per CPU during startup (in main.c for BSP, mpmain.c for APs)
-// to make the initialized IDT active for the current CPU.
+// 将 IDT 加载到 CPU 的 IDTR 寄存器中。
+// 此函数在启动期间由每个 CPU 调用一次（BSP 在 main.c 中调用，AP 在 mpmain.c 中调用），
+// 以使初始化的 IDT 对当前 CPU 生效。
 void
 idtinit(void)
 {
@@ -101,9 +80,9 @@ idtinit(void)
 }
 
 //PAGEBREAK: 41
-// Common trap handler function called from assembly code in `alltraps` (vectors.S).
-// `tf` is a pointer to the `struct trapframe` that was built on the stack by `alltraps`.
-// This function determines the type of trap/interrupt and dispatches accordingly.
+// 从 `alltraps` (vectors.S) 中的汇编代码调用的通用陷阱处理函数。
+// `tf` 是指向由 `alltraps` 在栈上构建的 `struct trapframe` 的指针。
+// 此函数确定陷阱/中断的类型并相应地进行分派。
 void
 trap(struct trapframe *tf)
 {

@@ -1,9 +1,6 @@
-// This file contains the kernel-side implementations of system calls
-// that are primarily related to process management and control.
-// These functions are invoked via the system call dispatch mechanism
-// in `syscall.c` when a user program makes a system call.
-// They often act as wrappers that call lower-level kernel functions
-// (e.g., from `proc.c`) to perform the requested operations.
+// 本文件包含主要与进程管理和控制相关的系统调用的内核端实现。
+// 当用户程序进行系统调用时，这些函数通过 `syscall.c` 中的系统调用分发机制被调用。
+// 它们通常充当包装器，调用更低级的内核函数（例如，来自 `proc.c`）以执行所请求的操作。
 
 #include "types.h"
 #include "x86.h"
@@ -14,21 +11,20 @@
 #include "mmu.h"
 #include "proc.h"
 
-// System call implementation for fork().
-// Calls the `fork()` function (defined in proc.c) which creates a new process
-// by duplicating the calling process.
-// Returns the child's PID to the parent, and 0 to the child.
-// Returns -1 on failure.
+// fork() 的系统调用实现。
+// 调用 `fork()` 函数（在 proc.c 中定义），该函数通过复制调用进程来创建一个新进程。
+// 向父进程返回子进程的PID，向子进程返回0。
+// 失败时返回-1。
 int
 sys_fork(void)
 {
   return fork();
 }
 
-// System call implementation for exit().
-// Calls the `exit()` function (defined in proc.c) which terminates the
-// current process. This function does not return to the user program.
-// The `return 0;` is never reached.
+// exit() 的系统调用实现。
+// 调用 `exit()` 函数（在 proc.c 中定义），该函数终止当前进程。
+// 此函数不会返回到用户程序。
+// `return 0;` 永远不会执行到。
 int
 sys_exit(void)
 {
@@ -36,22 +32,19 @@ sys_exit(void)
   return 0;  // not reached
 }
 
-// System call implementation for wait().
-// Calls the `wait()` function (defined in proc.c) which allows a parent
-// process to wait for one of its child processes to exit and retrieve its PID.
-// Returns the PID of the exited child, or -1 if the caller has no children
-// or if other error conditions occur.
+// wait() 的系统调用实现。
+// 调用 `wait()` 函数（在 proc.c 中定义），该函数允许父进程等待其某个子进程退出并检索其PID。
+// 返回已退出子进程的PID，如果调用者没有子进程或发生其他错误情况，则返回-1。
 int
 sys_wait(void)
 {
   return wait();
 }
 
-// System call implementation for kill().
-// Fetches the PID argument from the user stack using `argint`.
-// Calls the `kill()` function (defined in proc.c) to send a signal
-// (effectively, mark for termination) to the process with the specified PID.
-// Returns 0 on success, -1 on failure (e.g., PID not found).
+// kill() 的系统调用实现。
+// 使用 `argint` 从用户栈获取PID参数。
+// 调用 `kill()` 函数（在 proc.c 中定义）向具有指定PID的进程发送信号（实际上是标记为终止）。
+// 成功返回0，失败返回-1（例如，未找到PID）。
 int
 sys_kill(void)
 {
@@ -62,23 +55,21 @@ sys_kill(void)
   return kill(pid);
 }
 
-// System call implementation for getpid().
-// Returns the process ID (PID) of the current process.
-// `myproc()` (defined in proc.c) returns a pointer to the current process's
-// `struct proc`, from which `pid` is accessed.
+// getpid() 的系统调用实现。
+// 返回当前进程的进程ID (PID)。
+// `myproc()`（在 proc.c 中定义）返回一个指向当前进程 `struct proc` 的指针，
+// 从中可以访问 `pid`。
 int
 sys_getpid(void)
 {
   return myproc()->pid;
 }
 
-// System call implementation for sbrk().
-// Used by user programs to change their data segment size (heap).
-// Fetches the integer argument `n` (number of bytes to grow/shrink by)
-// from the user stack.
-// Calls `growproc()` (defined in proc.c) to adjust the process's memory size.
-// Returns the old size of the process's memory (the address of the previous
-// "break") on success, or -1 on failure.
+// sbrk() 的系统调用实现。
+// 用户程序使用此调用来更改其数据段大小（堆）。
+// 从用户栈获取整数参数 `n`（增加/减少的字节数）。
+// 调用 `growproc()`（在 proc.c 中定义）来调整进程的内存大小。
+// 成功时返回进程内存的旧大小（前一个“中断点”的地址），失败时返回-1。
 int
 sys_sbrk(void)
 {
@@ -93,13 +84,13 @@ sys_sbrk(void)
   return addr;           // Return old size.
 }
 
-// System call implementation for sleep().
-// Pauses the current process for a specified number of system clock ticks.
-// Fetches the integer argument `n` (number of ticks to sleep) from user stack.
-// It acquires `tickslock` to safely read `ticks` and call `sleep()` on the
-// `&ticks` channel. The process will be awakened by clock interrupts.
-// If the process is killed while sleeping, it returns -1.
-// Otherwise, returns 0 after sleeping for at least `n` ticks.
+// sleep() 的系统调用实现。
+// 将当前进程暂停指定的系统时钟滴答数。
+// 从用户栈获取整数参数 `n`（要睡眠的滴答数）。
+// 它获取 `tickslock` 以安全地读取 `ticks` 并在 `&ticks` 通道上调用 `sleep()`。
+// 进程将由时钟中断唤醒。
+// 如果进程在睡眠时被杀死，则返回-1。
+// 否则，在睡眠至少 `n` 个滴答后返回0。
 int
 sys_sleep(void)
 {
@@ -121,8 +112,7 @@ sys_sleep(void)
   return 0;
 }
 
-// return how many clock tick interrupts have occurred
-// since system startup.
+// 返回自系统启动以来已发生的时钟滴答中断次数。
 int
 sys_uptime(void)
 {

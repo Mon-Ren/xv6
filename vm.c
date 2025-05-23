@@ -8,16 +8,15 @@
 #include "elf.h"
 
 extern char data[];  // defined by kernel.ld
-// Kernel page directory. When no process is running, the CPU's CR3 register
-// points to this page directory. It maps all of physical memory identity-mapped
-// up to PHYSTOP, plus device mappings.
+// 内核页目录。当没有进程运行时，CPU的CR3寄存器
+// 指向此页目录。它将PHYSTOP之前的所有物理内存进行标识映射，
+// 外加设备映射。
 pde_t *kpgdir;  // for use in scheduler()
 
-// Set up CPU's kernel segment descriptors (GDT).
-// Run once on entry on each CPU. This function initializes the GDT
-// for the current CPU with segments for kernel code, kernel data,
-// user code, and user data. These segments define memory regions
-// and their access permissions for both kernel and user mode.
+// 设置CPU的内核段描述符 (GDT)。
+// 每个CPU进入时运行一次。此函数为当前CPU初始化GDT，
+// 包含内核代码、内核数据、用户代码和用户数据的段。
+// 这些段定义了内核模式和用户模式的内存区域及其访问权限。
 void
 seginit(void)
 {
@@ -35,13 +34,11 @@ seginit(void)
   lgdt(c->gdt, sizeof(c->gdt));
 }
 
-// Return the address of the PTE in page table pgdir
-// that corresponds to virtual address va. If alloc!=0,
-// create any required page table pages.
-// This function is central to page table management. It traverses the two-level
-// page table structure (page directory and page table) to find the PTE
-// for a given virtual address. If 'alloc' is true and a page table page
-// (or the page table itself) is missing, it allocates one using kalloc().
+// 返回页表pgdir中与虚拟地址va对应的PTE（页表条目）的地址。如果alloc!=0，
+// 则创建任何所需的页表页。
+// 此函数是页表管理的核心。它遍历两级页表结构（页目录和页表）
+// 以查找给定虚拟地址的PTE。如果'alloc'为true且页表页
+// （或页表本身）丢失，则使用kalloc()分配一个。
 static pte_t *
 walkpgdir(pde_t *pgdir, const void *va, int alloc)
 {
@@ -64,11 +61,10 @@ walkpgdir(pde_t *pgdir, const void *va, int alloc)
   return &pgtab[PTX(va)];
 }
 
-// Create PTEs for virtual addresses starting at va that refer to
-// physical addresses starting at pa. va and size might not
-// be page-aligned. This function maps a range of virtual addresses
-// to a range of physical addresses with specified permissions.
-// It uses walkpgdir to find the PTEs and creates them if necessary.
+// 创建从va开始的虚拟地址的PTE，这些PTE指向从pa开始的物理地址。
+// va和size可能未按页对齐。此函数将一系列虚拟地址映射到
+// 具有指定权限的一系列物理地址。
+// 它使用walkpgdir查找PTE，并在必要时创建它们。
 static int
 mappages(pde_t *pgdir, void *va, uint size, uint pa, int perm)
 {
@@ -126,11 +122,10 @@ static struct kmap {
  { (void*)DEVSPACE, DEVSPACE,      0,         PTE_W}, // more devices
 };
 
-// Set up kernel part of a page table. This function allocates a page
-// for a new page directory and then maps the kernel's address space
-// into it according to the 'kmap' specifications. This includes kernel
-// code/data, physical memory up to PHYSTOP, and I/O devices.
-// Returns the new page directory or 0 on failure.
+// 设置页表的内核部分。此函数为一个新的页目录分配一个页，
+// 然后根据'kmap'规范将内核的地址空间映射到其中。这包括内核
+// 代码/数据、直到PHYSTOP的物理内存以及I/O设备。
+// 成功则返回新的页目录，失败则返回0。
 pde_t*
 setupkvm(void)
 {
@@ -151,10 +146,9 @@ setupkvm(void)
   return pgdir;
 }
 
-// Allocate one page table for the machine for the kernel address
-// space for scheduler processes. This function calls setupkvm()
-// to create the kernel page directory (kpgdir) and then loads its
-// physical address into the CR3 register, making it the active page table.
+// 为机器的内核地址空间分配一个页表，供调度程序进程使用。
+// 此函数调用setupkvm()创建内核页目录(kpgdir)，然后将其
+// 物理地址加载到CR3寄存器中，使其成为活动页表。
 void
 kvmalloc(void)
 {
@@ -162,19 +156,19 @@ kvmalloc(void)
   switchkvm();
 }
 
-// Switch h/w page table register to the kernel-only page table,
-// for when no process is running (e.g., in the scheduler).
-// It loads the physical address of kpgdir into the CR3 register.
+// 将硬件页表寄存器切换到仅内核页表，
+// 用于没有进程运行时（例如，在调度程序中）。
+// 它将kpgdir的物理地址加载到CR3寄存器中。
 void
 switchkvm(void)
 {
   lcr3(V2P(kpgdir));   // switch to the kernel page table
 }
 
-// Switch TSS and h/w page table to correspond to process p.
-// This is called when the scheduler switches to a user process.
-// It sets up the Task State Segment (TSS) for the new process
-// and loads the process's page directory address into CR3.
+// 切换TSS和硬件页表以对应进程p。
+// 当调度程序切换到用户进程时调用此函数。
+// 它为新进程设置任务状态段 (TSS)，
+// 并将进程的页目录地址加载到CR3中。
 void
 switchuvm(struct proc *p)
 {
@@ -199,10 +193,9 @@ switchuvm(struct proc *p)
   popcli();
 }
 
-// Load the initcode into address 0 of pgdir.
-// sz must be less than a page. This function is used to set up
-// the first user process. It allocates one page of memory, maps it
-// at virtual address 0, and copies the initcode program into it.
+// 将initcode加载到pgdir的地址0处。
+// sz必须小于一页。此函数用于设置第一个用户进程。
+// 它分配一个内存页，将其映射到虚拟地址0，并将initcode程序复制到其中。
 void
 inituvm(pde_t *pgdir, char *init, uint sz)
 {
@@ -216,11 +209,10 @@ inituvm(pde_t *pgdir, char *init, uint sz)
   memmove(mem, init, sz);
 }
 
-// Load a program segment into pgdir. addr must be page-aligned
-// and the pages from addr to addr+sz must already be mapped (e.g., by allocuvm).
-// This function is used by exec() to load program segments from an ELF file
-// into the process's address space. It reads directly from the inode
-// into the physical memory mapped at the given virtual addresses.
+// 将程序段加载到pgdir中。addr必须页对齐，
+// 并且从addr到addr+sz的页必须已经映射（例如，通过allocuvm）。
+// exec()使用此函数将ELF文件中的程序段加载到进程的地址空间中。
+// 它直接从inode读取到给定虚拟地址映射的物理内存中。
 int
 loaduvm(pde_t *pgdir, char *addr, struct inode *ip, uint offset, uint sz)
 {
@@ -243,10 +235,9 @@ loaduvm(pde_t *pgdir, char *addr, struct inode *ip, uint offset, uint sz)
   return 0;
 }
 
-// Allocate page tables and physical memory to grow process from oldsz to
-// newsz, which need not be page aligned. Returns new size or 0 on error.
-// This function is used to grow a process's heap. It allocates physical pages
-// and maps them into the process's page table.
+// 分配页表和物理内存以将进程从oldsz增长到newsz，
+// newsz无需页对齐。成功时返回新的大小，错误时返回0。
+// 此函数用于增长进程的堆。它分配物理页并将它们映射到进程的页表中。
 int
 allocuvm(pde_t *pgdir, uint oldsz, uint newsz)
 {
@@ -277,12 +268,10 @@ allocuvm(pde_t *pgdir, uint oldsz, uint newsz)
   return newsz;
 }
 
-// Deallocate user pages to bring the process size from oldsz to
-// newsz. oldsz and newsz need not be page-aligned, nor does newsz
-// need to be less than oldsz. oldsz can be larger than the actual
-// process size. Returns the new process size.
-// This function is used to shrink a process's memory. It unmaps pages
-// and frees the corresponding physical memory.
+// 释放用户页以将进程大小从oldsz减小到newsz。
+// oldsz和newsz无需页对齐，newsz也无需小于oldsz。
+// oldsz可以大于实际进程大小。返回新的进程大小。
+// 此函数用于收缩进程的内存。它取消映射页面并释放相应的物理内存。
 int
 deallocuvm(pde_t *pgdir, uint oldsz, uint newsz)
 {
@@ -309,10 +298,9 @@ deallocuvm(pde_t *pgdir, uint oldsz, uint newsz)
   return newsz;
 }
 
-// Free a page table and all the physical memory pages
-// in the user part. This function is called when a process exits.
-// It first deallocates all user memory using deallocuvm, then frees
-// the page table pages themselves, and finally frees the page directory page.
+// 释放页表以及用户部分中的所有物理内存页。
+// 当进程退出时调用此函数。它首先使用deallocuvm释放所有用户内存，
+// 然后释放页表页本身，最后释放页目录页。
 void
 freevm(pde_t *pgdir)
 {
@@ -330,9 +318,9 @@ freevm(pde_t *pgdir)
   kfree((char*)pgdir);
 }
 
-// Clear PTE_U on a page. Used to create an inaccessible
-// page beneath the user stack (a guard page) to catch stack overflows.
-// By clearing the User bit, the page becomes accessible only in kernel mode.
+// 清除页上的PTE_U（用户可访问）位。用于在用户栈下方创建一个不可访问的
+// 页面（保护页），以捕获堆栈溢出。
+// 通过清除用户位，该页面仅在内核模式下可访问。
 void
 clearpteu(pde_t *pgdir, char *uva)
 {
@@ -344,12 +332,11 @@ clearpteu(pde_t *pgdir, char *uva)
   *pte &= ~PTE_U;
 }
 
-// Given a parent process's page table, create a copy
-// of it for a child. This is called by fork(). It allocates a new page
-// directory for the child, copies the parent's kernel space mappings,
-// and then iterates through the parent's user space. For each user page
-// in the parent, it allocates a new physical page for the child, copies
-// the content, and maps it into the child's address space.
+// 给定父进程的页表，为其子进程创建一个副本。
+// fork()调用此函数。它为子进程分配一个新的页目录，
+// 复制父进程的内核空间映射，然后遍历父进程的用户空间。
+// 对于父进程中的每个用户页，它为子进程分配一个新的物理页，
+// 复制内容，并将其映射到子进程的地址空间中。
 pde_t*
 copyuvm(pde_t *pgdir, uint sz)
 {
@@ -383,12 +370,12 @@ bad:
 }
 
 //PAGEBREAK!
-// Map user virtual address to kernel address.
-// This function translates a user virtual address (uva) within a given
-// page directory (pgdir) to its corresponding kernel virtual address.
-// It does this by finding the PTE for uva and then converting the
-// physical address in the PTE to a kernel virtual address.
-// Returns 0 if the page is not present or not user-accessible.
+// 将用户虚拟地址映射到内核地址。
+// 此函数将在给定页目录(pgdir)内将用户虚拟地址(uva)
+// 转换为其对应的内核虚拟地址。
+// 它通过查找uva的PTE，然后将PTE中的物理地址转换
+// 为内核虚拟地址来实现此目的。
+// 如果页面不存在或用户不可访问，则返回0。
 char*
 uva2ka(pde_t *pgdir, char *uva)
 {
@@ -402,11 +389,11 @@ uva2ka(pde_t *pgdir, char *uva)
   return (char*)P2V(PTE_ADDR(*pte));
 }
 
-// Copy len bytes from kernel memory 'p' to user virtual address 'va'
-// in the address space defined by 'pgdir'.
-// Most useful when pgdir is not the current page table (e.g., for a child process).
-// uva2ka ensures this only works for PTE_U (user-accessible) pages.
-// This function is used by system calls to safely copy data to user space.
+// 将len字节从内核内存'p'复制到由'pgdir'定义的地址空间中的
+// 用户虚拟地址'va'。
+// 当pgdir不是当前页表时（例如，对于子进程）最有用。
+// uva2ka确保这仅适用于PTE_U（用户可访问）页面。
+// 系统调用使用此函数将数据安全地复制到用户空间。
 int
 copyout(pde_t *pgdir, uint va, void *p, uint len)
 {

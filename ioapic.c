@@ -1,32 +1,26 @@
-// This file implements functions for interacting with the I/O APIC (Advanced
-// Programmable Interrupt Controller). The I/O APIC is responsible for routing
-// external hardware interrupts from devices (e.g., disk, keyboard, network card)
-// to specific CPUs in a multiprocessor (SMP) system. In a uniprocessor system
-// with an APIC, it still manages external interrupts, replacing the functionality
-// of the older 8259A PICs.
+// 本文件实现了与I/O APIC（高级可编程中断控制器）交互的功能。
+// I/O APIC负责将在多处理器（SMP）系统中来自设备（例如磁盘、键盘、网卡）的外部硬件中断路由到特定的CPU。
+// 在具有APIC的单处理器系统中，它仍然管理外部中断，取代了旧式8259A PIC的功能。
 //
-// Key Concepts:
-// - Memory-Mapped I/O (MMIO): The I/O APIC is accessed via memory-mapped
-//   registers. `IOAPIC` defines its default physical address.
-// - Redirection Table (RTE): The core of the I/O APIC. It's an array of
-//   entries (typically 24 or more), where each entry corresponds to an
-//   external interrupt line (IRQ). Each RTE is 64 bits wide and configured
-//   using two 32-bit registers (low and high parts).
-//   An RTE specifies:
-//     - Interrupt Vector: The vector number (0-255) that will be delivered to the CPU.
-//     - Delivery Mode: How the interrupt is delivered (e.g., Fixed, Lowest Priority).
-//     - Destination Mode: Physical (target APIC ID) or Logical (target set of CPUs).
-//     - Trigger Mode: Edge-triggered or Level-triggered.
-//     - Polarity: Active high or Active low.
-//     - Mask Bit: Whether the interrupt is masked (disabled) or unmasked (enabled).
-//     - Destination Field: Specifies the target CPU(s) or APIC ID(s).
-// - Registers:
-//   - `REG_ID`: I/O APIC ID register.
-//   - `REG_VER`: I/O APIC Version register (also indicates max redirection entries).
-//   - `REG_TABLE`: Base address of the redirection table entries.
+// 关键概念:
+// - 内存映射I/O (MMIO): I/O APIC通过内存映射寄存器进行访问。`IOAPIC` 定义了其默认物理地址。
+// - 重定向表 (RTE): I/O APIC的核心。它是一个条目数组（通常为24个或更多），
+//   其中每个条目对应一个外部中断线 (IRQ)。每个RTE为64位宽，使用两个32位寄存器（低位和高位部分）进行配置。
+//   一个RTE指定:
+//     - 中断向量: 将传递给CPU的向量号 (0-255)。
+//     - 传递模式: 中断如何传递（例如，固定模式、最低优先级模式）。
+//     - 目标模式: 物理模式（目标APIC ID）或逻辑模式（目标CPU集）。
+//     - 触发模式: 边沿触发或电平触发。
+//     - 极性: 高电平有效或低电平有效。
+//     - 屏蔽位: 中断是被屏蔽（禁用）还是未屏蔽（启用）。
+//     - 目标字段: 指定目标CPU或APIC ID。
+// - 寄存器:
+//   - `REG_ID`: I/O APIC ID寄存器。
+//   - `REG_VER`: I/O APIC版本寄存器（也指示最大重定向条目数）。
+//   - `REG_TABLE`: 重定向表条目的基地址。
 //
-// See Intel's I/O APIC datasheets (e.g., 29056601.pdf) for detailed specifications.
-// This file also effectively replaces `picirq.c` in APIC-based systems.
+// 有关详细规格，请参阅Intel的I/O APIC数据手册（例如，29056601.pdf）。
+// 在基于APIC的系统中，此文件还有效地取代了 `picirq.c`。
 
 #include "types.h"
 #include "defs.h"
@@ -47,21 +41,21 @@
                                    // Physical: Destination field is an APIC ID.
                                    // Logical: Destination field is a set of processors.
 
-// Pointer to the memory-mapped I/O APIC registers.
-// This is volatile because its contents can change asynchronously.
-// Initialized in `ioapicinit`.
+// 指向内存映射的I/O APIC寄存器的指针。
+// 这是volatile类型，因为其内容可能异步更改。
+// 在 `ioapicinit` 中初始化。
 volatile struct ioapic *ioapic;
 
-// Structure for accessing I/O APIC registers via MMIO.
-// To write to a register: write index to `reg`, then value to `data`.
-// To read from a register: write index to `reg`, then read value from `data`.
+// 通过MMIO访问I/O APIC寄存器的结构。
+// 要写入寄存器：先将索引写入 `reg`，然后将值写入 `data`。
+// 要从寄存器读取：先将索引写入 `reg`，然后从 `data` 读取值。
 struct ioapic {
-  uint reg;    // Address register: select which internal register to access.
-  uint pad[3]; // Padding to align `data` to a 16-byte boundary from `reg`.
-  uint data;   // Data register: read/write data from/to the selected internal register.
+  uint reg;    // 地址寄存器：选择要访问的内部寄存器。
+  uint pad[3]; // 填充，以使 `data` 从 `reg` 开始16字节对齐。
+  uint data;   // 数据寄存器：从选定的内部寄存器读/写数据。
 };
 
-// Read the value of an I/O APIC register `reg`.
+// 读取I/O APIC寄存器 `reg` 的值。
 static uint
 ioapicread(int reg)
 {
@@ -69,7 +63,7 @@ ioapicread(int reg)
   return ioapic->data; // Read its data.
 }
 
-// Write `data` to an I/O APIC register `reg`.
+// 将 `data` 写入I/O APIC寄存器 `reg`。
 static void
 ioapicwrite(int reg, uint data)
 {
@@ -77,19 +71,18 @@ ioapicwrite(int reg, uint data)
   ioapic->data = data; // Write the data.
 }
 
-// Initialize the I/O APIC.
-// This function is called once during kernel startup (in main.c if MP, or after LAPIC init).
-// Steps:
-// 1. Map the I/O APIC's physical address to `ioapic` virtual pointer.
-// 2. Read the version register to determine the maximum number of interrupt
-//    redirection entries (`maxintr`).
-// 3. Read the I/O APIC ID (for verification, though not strictly used by xv6 later).
-// 4. Initialize all redirection table entries (RTEs):
-//    - Mark them as disabled (`INT_DISABLED`).
-//    - Set the interrupt vector to `T_IRQ0 + i` (where `i` is the IRQ number).
-//      This ensures each IRQ maps to a unique vector handled in `trap.c`.
-//    - Set them as edge-triggered, active high (common defaults for ISA bus).
-//    - Route them to no CPUs initially (destination field in high part of RTE set to 0).
+// 初始化I/O APIC。
+// 此函数在内核启动期间调用一次（如果在MP环境中，则在main.c中调用；否则在LAPIC初始化之后调用）。
+// 步骤：
+// 1. 将I/O APIC的物理地址映射到 `ioapic` 虚拟指针。
+// 2. 读取版本寄存器以确定中断重定向条目的最大数量 (`maxintr`)。
+// 3. 读取I/O APIC ID（用于验证，尽管xv6后续不严格使用它）。
+// 4. 初始化所有重定向表条目 (RTE)：
+//    - 将它们标记为禁用 (`INT_DISABLED`)。
+//    - 将中断向量设置为 `T_IRQ0 + i`（其中 `i` 是IRQ编号）。
+//      这确保每个IRQ映射到 `trap.c` 中处理的唯一向量。
+//    - 将它们设置为边沿触发、高电平有效（ISA总线的常见默认值）。
+//    - 最初不将它们路由到任何CPU（RTE高位部分的目标字段设置为0）。
 void
 ioapicinit(void)
 {
@@ -112,22 +105,20 @@ ioapicinit(void)
   }
 }
 
-// Enable a specific hardware interrupt `irq` and route it to `cpunum`.
-// `cpunum` in xv6 typically corresponds to the LAPIC ID of the target CPU.
+// 启用特定的硬件中断 `irq` 并将其路由到 `cpunum`。
+// 在xv6中，`cpunum` 通常对应于目标CPU的LAPIC ID。
 //
-// Configuration for the IRQ's Redirection Table Entry (RTE):
-// - Vector: `T_IRQ0 + irq`. This maps the hardware IRQ to a specific
-//   interrupt vector handled in `trap.c`.
-// - Delivery Mode: Implied as Fixed (most common).
-// - Mask Bit: Cleared (interrupt enabled).
-// - Trigger Mode: Edge-triggered (default).
-// - Polarity: Active high (default).
-// - Destination Mode: Physical (targeting a specific APIC ID).
-// - Destination Field: `cpunum << 24` (the APIC ID is placed in the upper byte
-//   of the high part of the RTE).
+// IRQ的重定向表条目 (RTE) 配置：
+// - 向量: `T_IRQ0 + irq`。这将硬件IRQ映射到 `trap.c` 中处理的特定中断向量。
+// - 传递模式: 默认为固定模式 (最常见)。
+// - 屏蔽位: 清除 (中断启用)。
+// - 触发模式: 边沿触发 (默认)。
+// - 极性: 高电平有效 (默认)。
+// - 目标模式: 物理模式 (针对特定的APIC ID)。
+// - 目标字段: `cpunum << 24` (APIC ID放置在RTE高位部分的高字节中)。
 //
-// Note: There isn't an explicit `ioapicdisable` in xv6's provided code. Disabling
-// would involve setting the `INT_DISABLED` bit in the low part of the RTE for the IRQ.
+// 注意: xv6提供的代码中没有显式的 `ioapicdisable` 函数。禁用
+// 将涉及在IRQ的RTE的低位部分设置 `INT_DISABLED` 位。
 void
 ioapicenable(int irq, int cpunum)
 {
